@@ -137,11 +137,6 @@
 
     const ultAtual = document.getElementById("ultima-atualizacao");
     if (ultAtual) ultAtual.textContent = ultima.rotulo_periodo || "—";
-    // Link do repo: o workflow injeta o slug — por ora, sem href quebrado
-    const linkRepo = document.getElementById("link-repo");
-    if (linkRepo && linkRepo.getAttribute("href") === "#") {
-      linkRepo.removeAttribute("href");
-    }
   }
 
   function atualizarBanner(ultima) {
