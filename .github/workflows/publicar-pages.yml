@@ -1,0 +1,51 @@
+name: Publicar GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "data/processed/**"
+      - ".github/workflows/publicar-pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  publicar:
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Montar pasta _site
+        run: |
+          mkdir -p _site/data/processed
+          cp -r site/. _site/
+          if [ -f data/processed/poupanca_sc.csv ]; then
+            cp data/processed/poupanca_sc.csv _site/data/processed/
+          else
+            echo "::warning::Nenhum CSV em data/processed/ — o painel ficará vazio."
+          fi
+
+      - name: Configurar Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload do artefato
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy
+        id: deploy
+        uses: actions/deploy-pages@v4

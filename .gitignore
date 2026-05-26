@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+
+# Editores
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Sistema
+.env
+.env.local
+
+# Construção do site (geração temporária do workflow)
+_site/
+
+# Configuração local do Claude Code
+.claude/

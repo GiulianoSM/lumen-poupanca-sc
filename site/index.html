@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Poupança Corrente — Estado de Santa Catarina</title>
+  <meta name="description" content="Painel público de transparência fiscal sobre a poupança corrente do Estado de Santa Catarina, com indicadores constitucionais (EC 109/2021). Dados oficiais Siconfi/STN." />
+  <link rel="stylesheet" href="styles.css" />
+  <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <header class="topo">
+    <div class="container topo-conteudo">
+      <h1>Poupança Corrente <span class="topo-uf">SC</span></h1>
+      <p class="topo-sub">Transparência fiscal sobre as contas correntes do Estado de Santa Catarina · Dados <strong>Siconfi/STN</strong></p>
+    </div>
+  </header>
+
+  <nav class="abas container" role="tablist" aria-label="Seções do painel">
+    <button class="aba" role="tab" data-aba="visao" aria-selected="true">Visão Geral</button>
+    <button class="aba" role="tab" data-aba="rc-dc">RC × DC</button>
+    <button class="aba" role="tab" data-aba="historico">Histórico</button>
+    <button class="aba" role="tab" data-aba="metodologia">Metodologia</button>
+  </nav>
+
+  <main class="container">
+    <!-- VISÃO GERAL ----------------------------------------------------- -->
+    <section class="painel" id="painel-visao" role="tabpanel">
+      <div id="banner-status" class="banner banner--neutro">
+        <strong id="banner-titulo">Carregando dados…</strong>
+        <span id="banner-detalhe"></span>
+      </div>
+
+      <div class="grade-kpis">
+        <article class="kpi">
+          <h3>Receita Corrente</h3>
+          <p class="kpi-valor" id="kpi-rc">—</p>
+          <p class="kpi-rodape" id="kpi-rc-yoy">—</p>
+        </article>
+        <article class="kpi">
+          <h3>Despesa Corrente</h3>
+          <p class="kpi-valor" id="kpi-dc">—</p>
+          <p class="kpi-rodape" id="kpi-dc-yoy">—</p>
+        </article>
+        <article class="kpi" id="kpi-poup">
+          <h3>Poupança Bruta</h3>
+          <p class="kpi-valor" id="kpi-poup-valor">—</p>
+          <p class="kpi-rodape" id="kpi-poup-rodape">—</p>
+        </article>
+        <article class="kpi" id="kpi-razao">
+          <h3>DC ÷ RC</h3>
+          <p class="kpi-valor" id="kpi-razao-valor">—</p>
+          <p class="kpi-rodape" id="kpi-razao-rodape">Art. 167-A da CF</p>
+        </article>
+      </div>
+
+      <div class="bloco">
+        <h2>Receitas e despesas correntes — série histórica</h2>
+        <p class="bloco-legenda">Valores acumulados no exercício (bimestres). Linhas tracejadas marcam os gatilhos do art. 167-A: <span class="legenda-marca-1">85% (alerta)</span> · <span class="legenda-marca-2">95% (crítico)</span>.</p>
+        <div class="grafico-area"><canvas id="g-historico"></canvas></div>
+      </div>
+    </section>
+
+    <!-- RC × DC ---------------------------------------------------------- -->
+    <section class="painel oculto" id="painel-rc-dc" role="tabpanel">
+      <div class="bloco">
+        <h2>DC ÷ RC — média móvel de 12 meses</h2>
+        <p class="bloco-legenda">Bandas pintadas representam as zonas constitucionais (EC 109/2021): verde &lt; 85%, amarelo 85-95%, vermelho ≥ 95%.</p>
+        <div class="grafico-area"><canvas id="g-razao"></canvas></div>
+      </div>
+
+      <div class="bloco">
+        <h2>Composição da despesa corrente — último bimestre</h2>
+        <div class="grafico-area"><canvas id="g-composicao"></canvas></div>
+      </div>
+    </section>
+
+    <!-- HISTÓRICO ------------------------------------------------------- -->
+    <section class="painel oculto" id="painel-historico" role="tabpanel">
+      <div class="bloco">
+        <h2>Crescimento ano-contra-ano (mesmo bimestre)</h2>
+        <p class="bloco-legenda">Variação % do bimestre acumulado em relação ao mesmo bimestre do ano anterior.</p>
+        <div class="grafico-area"><canvas id="g-yoy"></canvas></div>
+      </div>
+
+      <div class="bloco">
+        <h2>Série completa</h2>
+        <div class="tabela-rolavel">
+          <table id="tabela-historico">
+            <thead>
+              <tr>
+                <th>Período</th>
+                <th>Receita Corrente</th>
+                <th>Despesa Corrente</th>
+                <th>Poupança Bruta</th>
+                <th>DC÷RC</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- METODOLOGIA ----------------------------------------------------- -->
+    <section class="painel oculto" id="painel-metodologia" role="tabpanel">
+      <div class="bloco prosa">
+        <h2>Como o painel é construído</h2>
+        <p>Os dados são extraídos diretamente da <strong>API pública do Siconfi</strong> (STN/Ministério da Fazenda), no endpoint do Relatório Resumido de Execução Orçamentária (RREO), <strong>Anexo 01 — Balanço Orçamentário</strong>, para o ente <code>id_ente=42</code> (Estado de SC).</p>
+
+        <h3>Indicadores</h3>
+        <ul>
+          <li><strong>Poupança bruta</strong> = Receita Corrente − Despesa Corrente.</li>
+          <li><strong>Poupança líquida (proxy)</strong> = (Receita Corrente − Transferências Correntes) − Despesa Corrente. <em>Proxy</em> porque a dedução exata para apurar a RCL (transferências constitucionais e legais que o Estado faz aos Municípios) vive no Anexo 03 do RREO; esta v1 trabalha apenas com o Anexo 01.</li>
+          <li><strong>DC ÷ RC</strong> = Despesa Corrente ÷ Receita Corrente, no bimestre acumulado e em média móvel de 4 bimestres (~12 meses).</li>
+        </ul>
+
+        <h3>Gatilhos constitucionais — art. 167-A (EC 109/2021)</h3>
+        <table class="tabela-gatilhos">
+          <thead>
+            <tr><th>Zona</th><th>DC÷RC</th><th>Interpretação</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><span class="marca-verde"></span> Confortável</td><td>&lt; 85%</td><td>Espaço fiscal para investimento e poupança corrente positiva.</td></tr>
+            <tr><td><span class="marca-amarela"></span> Alerta</td><td>85% – 95%</td><td>Aproximação dos gatilhos automáticos da EC 109; vigilância recomendada.</td></tr>
+            <tr><td><span class="marca-vermelha"></span> Crítica</td><td>≥ 95%</td><td>Acima do limiar para acionamento das vedações do art. 167-A.</td></tr>
+          </tbody>
+        </table>
+
+        <h3>Atualização</h3>
+        <p>Pipeline automatizado em <strong>GitHub Actions</strong>, executando no dia 5 de cada mês (09:00 UTC). Re-publica o painel quando há novos dados.</p>
+
+        <h3>Fontes oficiais</h3>
+        <ul>
+          <li><a href="https://apidatalake.tesouro.gov.br/docs/siconfi/" target="_blank" rel="noopener">API Siconfi (STN)</a></li>
+          <li><a href="https://www.tesourotransparente.gov.br/temas/contabilidade-e-custos/manual-dos-demonstrativos-fiscais-mdf" target="_blank" rel="noopener">Manual dos Demonstrativos Fiscais (MDF) — STN</a></li>
+          <li><a href="https://www.planalto.gov.br/ccivil_03/constituicao/emendas/emc/emc109.htm" target="_blank" rel="noopener">EC 109/2021 — Emenda Constitucional</a></li>
+        </ul>
+      </div>
+    </section>
+  </main>
+
+  <footer class="rodape">
+    <div class="container">
+      <p>Painel cidadão · construído com dados públicos da STN · código aberto no <a id="link-repo" href="#" target="_blank" rel="noopener">GitHub</a>.</p>
+      <p class="rodape-fino">Última atualização do conjunto: <span id="ultima-atualizacao">—</span></p>
+    </div>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,55 @@
+name: Atualizar dados Siconfi
+
+# Atualização mensal do conjunto: dia 5 às 09:00 UTC (~06:00 de Brasília).
+# Bimestres oficiais costumam ser publicados no STN ao longo do mês seguinte.
+on:
+  schedule:
+    - cron: "0 9 5 * *"
+  workflow_dispatch:
+    inputs:
+      forcar:
+        description: "Re-baixar todos os JSONs ignorando o cache"
+        required: false
+        default: "false"
+
+permissions:
+  contents: write
+
+jobs:
+  atualizar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Extrair RREO
+        run: |
+          if [ "${{ github.event.inputs.forcar }}" = "true" ]; then
+            python -m src.extract --forcar
+          else
+            python -m src.extract
+          fi
+
+      - name: Consolidar e calcular indicadores
+        run: python -m src.transform
+
+      - name: Commit das novidades (se houver)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/
+          if git diff --cached --quiet; then
+            echo "Sem novidades — nada a commitar."
+          else
+            git commit -m "chore(dados): atualização mensal Siconfi"
+            git push
+          fi
