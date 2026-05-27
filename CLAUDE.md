@@ -30,6 +30,11 @@ Vive no **RREO Anexo 03** (Demonstrativo da RCL). **Esta v1 do painel não conso
 ### Art. 167-A da CF (EC 109/2021)
 Gatilho fiscal: se DC ÷ RC ≥ 95% no exercício anterior, vedações automáticas no exercício seguinte (contratação, reajustes, novos benefícios tributários, etc.). Texto integral em [docs/ec-109.md](docs/ec-109.md).
 
+**Três escolhas críticas** que fazemos no cálculo (alinhadas com a SEF/SC — vide `docs/metodologia.md`):
+1. **Agregamos intra-orçamentárias.** Cada conta corrente aparece duas vezes no RREO Anexo 01 (seção I/VIII = exceto-intra, seção II/IX = intra). Distintivo via `cod_conta` (sufixo `Intra`). Somamos.
+2. **Despesa empenhada**, não liquidada — estágio canônico para limites de gasto (LRF art. 19). Mantemos liquidada em colunas `_liq` para auditoria.
+3. **Rolling 12 meses** (`dc_rc_12m`), não acumulado dentro do exercício. Fórmula: `12m[a,b] = anual[a-1] + acum[a,b] - acum[a-1,b]`. É a chave do art. 167-A ("exercício financeiro anterior").
+
 Faixas adotadas no painel:
 - < 85% → confortável (verde)
 - 85-95% → alerta (amarelo) — convenção do painel, *não* constitucional

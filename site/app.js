@@ -156,16 +156,34 @@
     };
     titulo.textContent =
       mensagens[ultima.status_constitucional] || "Status indisponível";
+    // Métrica oficial é o rolling 12m; mostramos como referência principal,
+    // com a razão do bimestre entre parênteses para contexto.
+    const ratio12m = ultima.dc_rc_12m;
+    const ratioBim = ultima.dc_rc;
+    const principal = ratio12m != null && !isNaN(ratio12m) ? ratio12m : ratioBim;
+    const sufixo12m =
+      ratio12m != null && !isNaN(ratio12m) ? " (móvel 12m)" : " (bimestre)";
     detalhe.textContent = `Referência: ${ultima.rotulo_periodo} · DC÷RC = ${fmtPct(
-      ultima.dc_rc, 2
-    )}`;
+      principal, 2
+    )}${sufixo12m}`;
   }
 
   function atualizarKPIs(ultima, anterior) {
     document.getElementById("kpi-rc").textContent = fmtBRLcurto(ultima.receitas_correntes);
     document.getElementById("kpi-dc").textContent = fmtBRLcurto(ultima.despesas_correntes);
     document.getElementById("kpi-poup-valor").textContent = fmtBRLcurto(ultima.poupanca_bruta);
-    document.getElementById("kpi-razao-valor").textContent = fmtPct(ultima.dc_rc, 1);
+    // KPI da razão mostra o indicador oficial (rolling 12m); fallback bimestre
+    const ratio12mKpi = ultima.dc_rc_12m;
+    const ratioPrincipal =
+      ratio12mKpi != null && !isNaN(ratio12mKpi) ? ratio12mKpi : ultima.dc_rc;
+    document.getElementById("kpi-razao-valor").textContent = fmtPct(ratioPrincipal, 1);
+    const rodapeRazao = document.getElementById("kpi-razao-rodape");
+    if (rodapeRazao) {
+      rodapeRazao.textContent =
+        ratio12mKpi != null && !isNaN(ratio12mKpi)
+          ? "Art. 167-A · móvel 12m"
+          : "Art. 167-A · acumulado bimestre";
+    }
 
     // YoY no rodapé (compara com bimestre equivalente do ano anterior)
     const yoyRC = ultima.yoy_receitas_correntes;
@@ -425,6 +443,7 @@
         <td>${fmtBRL(l.despesas_correntes)}</td>
         <td>${fmtBRL(l.poupanca_bruta)}</td>
         <td>${fmtPct(l.dc_rc, 2)}</td>
+        <td>${fmtPct(l.dc_rc_12m, 2)}</td>
         <td><span class="status-pill status-pill--${cls}">${l.status_constitucional || "—"}</span></td>
       `;
       tbody.appendChild(tr);

@@ -1,21 +1,32 @@
 """Consolidação e cálculo de indicadores fiscais.
 
-Lê todos os JSONs de `data/raw/`, extrai as contas relevantes (Receitas e
-Despesas Correntes e seus subitens), e produz:
+Lê todos os JSONs de `data/raw/`, extrai as contas relevantes do RREO Anexo 01
+e produz CSV (auditoria) e Parquet (análise) em `data/processed/`.
 
-- `data/processed/poupanca_sc.csv`     — auditoria humana
-- `data/processed/poupanca_sc.parquet` — eficiência analítica
+### Decisões metodológicas (alinhadas com a SEF/SC para o art. 167-A)
 
-Indicadores calculados por bimestre acumulado:
-- poupanca_bruta            = receitas_correntes - despesas_correntes
-- poupanca_liquida_proxy    = (receitas_correntes - transferencias_correntes) - despesas_correntes
-- dc_rc                     = despesas_correntes / receitas_correntes
-- dc_rc_12m                 = média móvel de 12 meses da DC/RC (4 bimestres)
-- status_constitucional     = classificação pelo art. 167-A da CF (EC 109/2021)
-- crescimento_yoy_*         = variação % ano-contra-ano do mesmo bimestre
+1. **Inclusão de intra-orçamentárias.** Cada conta corrente aparece duas
+   vezes no RREO: na seção "EXCETO INTRA-ORÇAMENTÁRIAS" e na seção
+   "INTRA-ORÇAMENTÁRIAS". Somamos ambas — o agregado é o universo natural
+   para análise de um único ente. As parcelas exceto-intra ficam disponíveis
+   em colunas com sufixo `_exc_intra` para auditoria.
+2. **Despesa em estágio de empenho.** Para a leitura constitucional do
+   art. 167-A, usamos `DESPESAS EMPENHADAS ATÉ O BIMESTRE (f)` como métrica
+   principal. As liquidadas ficam em colunas com sufixo `_liq`.
+3. **DC/RC rolling 12 meses.** O texto constitucional fala em "exercício
+   financeiro anterior" → janela de 12 meses fechados, não acumulado dentro
+   do exercício. Calculamos:
+        DC12m[ano, bim] = DC_acum[ano-1, 6] + DC_acum[ano, bim] − DC_acum[ano-1, bim]
+   (idem RC). Para bimestres sem o ano anterior completo na base, fica NaN.
 
-Uso:
-    python -m src.transform
+Indicadores derivados:
+- poupanca_bruta              = rc_total − dc_total_empenhada
+- poupanca_liquida_proxy      = (rc_total − transf_correntes) − dc_total_emp
+- dc_rc                       = dc_total_emp / rc_total (acumulado no exercício)
+- dc_rc_12m                   = rolling 12m (chave do art. 167-A)
+- status_constitucional       = classificação pelo dc_rc_12m quando disponível,
+                                senão pelo dc_rc do bimestre
+- crescimento_yoy_*           = variação % ano-contra-ano do mesmo bimestre
 """
 from __future__ import annotations
 
@@ -27,7 +38,8 @@ from pathlib import Path
 import pandas as pd
 
 from .config import (
-    COLUNA_DESPESA_ACUMULADA,
+    COLUNA_DESPESA_EMPENHADA,
+    COLUNA_DESPESA_LIQUIDADA,
     COLUNA_RECEITA_ACUMULADA,
     CONTAS_DESPESA,
     CONTAS_RECEITA,
@@ -48,14 +60,29 @@ logging.basicConfig(
 log = logging.getLogger("transform")
 
 
-def _coluna_alvo(tipo: str) -> set[str]:
-    """Aceita pequenas variações de pontuação na descrição da coluna."""
-    alvo = COLUNA_RECEITA_ACUMULADA if tipo == "receita" else COLUNA_DESPESA_ACUMULADA
-    return {normalizar(alvo)}
+def _para_float(valor) -> float | None:
+    if valor is None or valor == "":
+        return None
+    try:
+        return float(valor)
+    except (TypeError, ValueError):
+        return None
+
+
+def _eh_intra(cod_conta: str | None) -> bool:
+    """True quando o cod_conta indica a linha intra-orçamentária."""
+    return "Intra" in (cod_conta or "")
 
 
 def _extrair_valores_arquivo(caminho: Path) -> dict | None:
-    """Lê um JSON RREO e devolve um dict com as contas-alvo."""
+    """Lê um JSON RREO e devolve um dict com as contas-alvo agregadas.
+
+    Para cada conta canônica (ex.: receitas_correntes), produz:
+      - `<chave>`           : soma exceto-intra + intra
+      - `<chave>_exc_intra` : apenas exceto-intra (auditoria)
+    Para despesas, há ainda variantes em estágio empenhado (padrão) e
+    liquidado (sufixo `_liq`).
+    """
     try:
         payload = json.loads(caminho.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as e:
@@ -69,82 +96,134 @@ def _extrair_valores_arquivo(caminho: Path) -> dict | None:
     primeiro = itens[0]
     ano = int(primeiro.get("exercicio"))
     bimestre = int(primeiro.get("periodo"))
-
     linha: dict = {"ano": ano, "bimestre": bimestre}
 
-    colunas_receita = _coluna_alvo("receita")
-    colunas_despesa = _coluna_alvo("despesa")
+    col_rc = normalizar(COLUNA_RECEITA_ACUMULADA)
+    col_dc_emp = normalizar(COLUNA_DESPESA_EMPENHADA)
+    col_dc_liq = normalizar(COLUNA_DESPESA_LIQUIDADA)
 
-    encontradas_receita = set()
-    encontradas_despesa = set()
+    # Acumuladores temporários: {chave_canonica: {exc, intra}}
+    rc_acum: dict[str, dict[str, float]] = {}
+    dc_emp_acum: dict[str, dict[str, float]] = {}
+    dc_liq_acum: dict[str, dict[str, float]] = {}
 
     for item in itens:
-        coluna_norm = normalizar(item.get("coluna"))
-        desc = item.get("conta")
-        valor = item.get("valor")
+        coluna_n = normalizar(item.get("coluna"))
+        valor = _para_float(item.get("valor"))
+        cod = item.get("cod_conta")
+        bucket = "intra" if _eh_intra(cod) else "exc"
 
-        # Caminho de receita
-        if coluna_norm in colunas_receita:
-            canonica = conta_canonica(desc, "receita")
-            if canonica and canonica not in encontradas_receita:
-                linha[canonica] = _para_float(valor)
-                encontradas_receita.add(canonica)
+        canon_r = conta_canonica(item.get("conta"), "receita")
+        canon_d = conta_canonica(item.get("conta"), "despesa")
 
-        # Caminho de despesa
-        if coluna_norm in colunas_despesa:
-            canonica = conta_canonica(desc, "despesa")
-            if canonica and canonica not in encontradas_despesa:
-                linha[canonica] = _para_float(valor)
-                encontradas_despesa.add(canonica)
+        if canon_r and coluna_n == col_rc and valor is not None:
+            rc_acum.setdefault(canon_r, {}).setdefault(bucket, 0.0)
+            rc_acum[canon_r][bucket] += valor
 
-    # Garante presença das chaves esperadas (NaN se ausentes)
+        if canon_d and valor is not None:
+            if coluna_n == col_dc_emp:
+                dc_emp_acum.setdefault(canon_d, {}).setdefault(bucket, 0.0)
+                dc_emp_acum[canon_d][bucket] += valor
+            elif coluna_n == col_dc_liq:
+                dc_liq_acum.setdefault(canon_d, {}).setdefault(bucket, 0.0)
+                dc_liq_acum[canon_d][bucket] += valor
+
+    # Materializa colunas finais
     for chave in CONTAS_RECEITA:
-        linha.setdefault(chave, None)
+        vals = rc_acum.get(chave, {})
+        exc = vals.get("exc")
+        intra = vals.get("intra", 0.0) if "intra" in vals else None
+        total = (exc or 0.0) + (intra or 0.0) if (exc is not None or intra is not None) else None
+        linha[chave] = total
+        linha[f"{chave}_exc_intra"] = exc
+
     for chave in CONTAS_DESPESA:
-        linha.setdefault(chave, None)
+        # Empenhada (métrica principal)
+        vals_e = dc_emp_acum.get(chave, {})
+        exc_e = vals_e.get("exc")
+        intra_e = vals_e.get("intra", 0.0) if "intra" in vals_e else None
+        tot_e = (exc_e or 0.0) + (intra_e or 0.0) if (exc_e is not None or intra_e is not None) else None
+        linha[chave] = tot_e
+        linha[f"{chave}_exc_intra"] = exc_e
+
+        # Liquidada (auditoria)
+        vals_l = dc_liq_acum.get(chave, {})
+        exc_l = vals_l.get("exc")
+        intra_l = vals_l.get("intra", 0.0) if "intra" in vals_l else None
+        tot_l = (exc_l or 0.0) + (intra_l or 0.0) if (exc_l is not None or intra_l is not None) else None
+        linha[f"{chave}_liq"] = tot_l
 
     return linha
 
 
-def _para_float(valor) -> float | None:
-    if valor is None or valor == "":
-        return None
-    try:
-        return float(valor)
-    except (TypeError, ValueError):
-        return None
+def _rolling_12m(df: pd.DataFrame, coluna_acum: str) -> pd.Series:
+    """Calcula janela móvel de 12 meses sobre coluna acumulada-no-exercício.
+
+    Fórmula: 12m[ano, bim] = anual[ano-1] + acum[ano, bim] − acum[ano-1, bim].
+    Equivale a "trailing 12 months" para dados bimestrais cumulativos.
+    """
+    # Mapas auxiliares (ano, bim) → valor acumulado
+    acum = df.set_index(["ano", "bimestre"])[coluna_acum]
+    # Anual = acumulado no bimestre 6
+    anual = df[df["bimestre"] == 6].set_index("ano")[coluna_acum]
+
+    valores = []
+    for _, row in df.iterrows():
+        a, b = int(row["ano"]), int(row["bimestre"])
+        try:
+            anual_anterior = anual.loc[a - 1]
+            acum_anterior = acum.loc[(a - 1, b)]
+            atual = row[coluna_acum]
+            if pd.isna(anual_anterior) or pd.isna(acum_anterior) or pd.isna(atual):
+                valores.append(float("nan"))
+            else:
+                valores.append(anual_anterior + atual - acum_anterior)
+        except KeyError:
+            valores.append(float("nan"))
+    return pd.Series(valores, index=df.index)
 
 
 def _calcular_indicadores(df: pd.DataFrame) -> pd.DataFrame:
     df = df.sort_values(["ano", "bimestre"]).reset_index(drop=True)
 
-    # Identificadores temporais
+    # Identificadores temporais (data_ref = primeiro dia do mês posterior ao bimestre)
     df["data_ref"] = pd.to_datetime(
         df["ano"].astype(str) + "-" + (df["bimestre"] * 2).astype(str) + "-01",
         errors="coerce",
     )
     df["rotulo_periodo"] = df["ano"].astype(str) + "-B" + df["bimestre"].astype(str)
 
-    # Indicadores principais
+    # Indicadores principais (sobre o agregado total: exc-intra + intra,
+    # com despesa em estágio empenhado).
     df["poupanca_bruta"] = df["receitas_correntes"] - df["despesas_correntes"]
     df["poupanca_liquida_proxy"] = (
         df["receitas_correntes"] - df["transferencias_correntes"]
     ) - df["despesas_correntes"]
     df["dc_rc"] = df["despesas_correntes"] / df["receitas_correntes"]
 
-    # Média móvel de 4 bimestres (~12 meses) da DC/RC
-    df["dc_rc_12m"] = df["dc_rc"].rolling(window=4, min_periods=1).mean()
+    # Variante com despesa liquidada (para comparação/auditoria)
+    df["dc_rc_liquidada"] = df["despesas_correntes_liq"] / df["receitas_correntes"]
 
-    # Status constitucional (faixa do art. 167-A) — pelo DC/RC do bimestre
-    df["status_constitucional"] = df["dc_rc"].apply(
-        lambda x: classificar_dc_rc(x) if pd.notna(x) else ""
-    )
+    # Rolling 12 meses — métrica do art. 167-A
+    rc_12m = _rolling_12m(df, "receitas_correntes")
+    dc_12m = _rolling_12m(df, "despesas_correntes")
+    df["receitas_correntes_12m"] = rc_12m
+    df["despesas_correntes_12m"] = dc_12m
+    df["dc_rc_12m"] = dc_12m / rc_12m
 
-    # Composição de despesa (participação relativa)
+    # Status constitucional: prefere a métrica rolling 12m (correta);
+    # quando indisponível (primeiros anos da série), cai para o bimestre.
+    def classificar(row):
+        ratio = row["dc_rc_12m"] if pd.notna(row["dc_rc_12m"]) else row["dc_rc"]
+        return classificar_dc_rc(ratio) if pd.notna(ratio) else ""
+
+    df["status_constitucional"] = df.apply(classificar, axis=1)
+
+    # Composição de despesa (participação relativa, sobre o total empenhado)
     for chave in ["pessoal_encargos", "juros_encargos", "outras_despesas_correntes"]:
         df[f"part_{chave}"] = df[chave] / df["despesas_correntes"]
 
-    # Crescimento YoY (mesmo bimestre, ano anterior)
+    # Crescimento YoY (mesmo bimestre, ano anterior) — sobre o agregado
     for campo in ["receitas_correntes", "despesas_correntes", "poupanca_bruta"]:
         df[f"yoy_{campo}"] = df.groupby("bimestre")[campo].pct_change()
 
@@ -188,10 +267,12 @@ def _resumo(df: pd.DataFrame) -> None:
         log.warning("sem dados a resumir.")
         return
     ult = df.iloc[-1]
+    ratio_principal = ult["dc_rc_12m"] if pd.notna(ult["dc_rc_12m"]) else ult["dc_rc"]
     log.info(
-        "último bimestre: %s | DC/RC=%.2f%% | status=%s | poupança bruta=R$ %.2f bi",
+        "último bimestre: %s | DC/RC (bim)=%.2f%% | DC/RC (12m)=%s | status=%s | poup. bruta=R$ %.2f bi",
         ult["rotulo_periodo"],
         (ult["dc_rc"] or 0) * 100,
+        f"{ult['dc_rc_12m']*100:.2f}%" if pd.notna(ult["dc_rc_12m"]) else "n/d",
         ult["status_constitucional"],
         (ult["poupanca_bruta"] or 0) / 1e9,
     )

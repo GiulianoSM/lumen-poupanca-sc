@@ -26,22 +26,29 @@ ANO_INICIAL = 2015          # MDF reorganizado nesta janela; antes a estrutura d
 PERIODOS = [1, 2, 3, 4, 5, 6]  # bimestres
 
 # --- Colunas do RREO Anexo 01 ------------------------------------------------
-# Receitas: acumulado no exercício (campo "coluna" na resposta da API)
+# Receitas: acumulado realizado no exercício
 COLUNA_RECEITA_ACUMULADA = "Até o Bimestre (c)"
-# Despesas: acumulado de despesas LIQUIDADAS (padrão para análise de execução
-# corrente no exercício; vide MDF, RREO Anexo 01)
-COLUNA_DESPESA_ACUMULADA = "DESPESAS LIQUIDADAS ATÉ O BIMESTRE (h)"
+# Despesas: usamos EMPENHADAS para alinhar com a leitura da SEF/SC para
+# o art. 167-A (vide docs/metodologia.md). Coletamos também as LIQUIDADAS
+# para auditoria/comparação.
+COLUNA_DESPESA_EMPENHADA = "DESPESAS EMPENHADAS ATÉ O BIMESTRE (f)"
+COLUNA_DESPESA_LIQUIDADA = "DESPESAS LIQUIDADAS ATÉ O BIMESTRE (h)"
 
 # --- Mapeamento de contas ----------------------------------------------------
 # Chave = nome canônico (snake_case) usado nos relatórios.
 # Valor = descrição da conta no RREO, normalizada (sem acento, upper, stripped).
-# Use `normalizar(s)` para gerar a chave de comparação.
 #
-# Observação: o RREO Anexo 01 não detalha "Transferências Constitucionais e
-# Legais" (este recorte vive no RREO Anexo 03 — Demonstrativo da RCL).
-# Como proxy nesta v1 usamos o total de "Transferências Correntes" recebidas
-# (subitem das Receitas Correntes). Isso é uma aproximação documentada na
-# metodologia e pode ser refinada incorporando o Anexo 03 no futuro.
+# IMPORTANTE: o RREO Anexo 01 traz cada conta corrente em DUAS instâncias:
+#   1) na seção "RECEITAS (EXCETO INTRA-ORÇAMENTÁRIAS) (I)" / "DESPESAS (...) (VIII)"
+#   2) na seção "RECEITAS (INTRA-ORÇAMENTÁRIAS) (II)" / "DESPESAS (...) (IX)"
+# Para alinhar com a leitura da SEF/SC (e com a apuração correta do art. 167-A,
+# que opera sobre o agregado do ente), SOMAMOS as duas linhas.
+# O distintivo entre elas é o `cod_conta`: a versão intra tem sufixo "Intra"
+# (ex.: `ReceitasCorrentes` vs `ReceitasCorrentesIntra`).
+#
+# Observação sobre transferências: o RREO Anexo 01 não detalha "Transferências
+# Constitucionais e Legais a Municípios" — este recorte vive no RREO Anexo 03
+# (Demonstrativo da RCL), fora desta v1.
 CONTAS_RECEITA = {
     "receitas_correntes": "RECEITAS CORRENTES",
     "transferencias_correntes": "TRANSFERÊNCIAS CORRENTES",

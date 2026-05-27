@@ -12,20 +12,57 @@ Os dados deste painel vêm exclusivamente da **API pública do Siconfi** (Sistem
 ## Janela temporal
 Cobertura de **2015 até o ano corrente**. Antes de 2015, o MDF (Manual dos Demonstrativos Fiscais) sofreu reorganizações relevantes; estabilizá-las exigiria mapeamentos específicos fora do escopo desta v1.
 
-## Coluna de valor utilizada
-- **Receitas correntes:** coluna `Até o Bimestre (c)` — acumulado realizado no exercício.
-- **Despesas correntes:** coluna `DESPESAS LIQUIDADAS ATÉ O BIMESTRE (h)` — acumulado liquidado no exercício.
+## Três escolhas metodológicas críticas
 
-Liquidada é o estágio mais comumente adotado para análises de execução corrente — empenhado superestima (inclui restos a pagar não processados) e pago subestima (depende de fluxo de caixa).
+A leitura padrão (acumulado no exercício, exceto-intra, liquidada) **subestima sistematicamente** o indicador do art. 167-A. Para alinhar com a interpretação da SEF/SC e da literatura fiscal, fazemos três ajustes:
+
+### 1. Agregamos intra-orçamentárias
+
+Cada conta corrente aparece **duas vezes** no RREO Anexo 01:
+- Uma linha na seção **"EXCETO INTRA-ORÇAMENTÁRIAS (I/VIII)"**
+- Uma linha na seção **"INTRA-ORÇAMENTÁRIAS (II/IX)"**
+
+O distintivo está no campo `cod_conta`: a versão intra termina com `Intra` (ex.: `ReceitasCorrentes` vs `ReceitasCorrentesIntra`). **Somamos as duas** porque o agregado é o universo natural para análise de um único ente — a segregação intra serve à consolidação federativa para evitar dupla contagem, não à leitura interna do Estado.
+
+Mantemos as parcelas exceto-intra disponíveis em colunas com sufixo `_exc_intra` para auditoria.
+
+### 2. Despesa em estágio de empenho
+
+Para a leitura constitucional do art. 167-A, usamos `DESPESAS EMPENHADAS ATÉ O BIMESTRE (f)` como métrica principal:
+
+- **Empenhada**: compromisso assumido. Estágio canônico para limites de gasto (a LRF usa empenhado para o limite de pessoal, art. 19).
+- Liquidada: serviço prestado / mercadoria entregue. Útil mas sub-mede compromissos do exercício.
+- Paga: fluxo de caixa. Depende de calendário financeiro, não é a métrica certa para análise estrutural.
+
+As liquidadas ficam disponíveis em colunas `_liq` (e o ratio `dc_rc_liquidada`) para comparação.
+
+### 3. Janela móvel de 12 meses
+
+O art. 167-A fala em "exercício financeiro anterior" — uma janela de 12 meses fechados, **não** acumulado dentro do exercício corrente. Calculamos:
+
+```
+DC12m[ano, bim] = DC_anual[ano-1] + DC_acum[ano, bim] − DC_acum[ano-1, bim]
+RC12m[ano, bim] = (idem para receita)
+dc_rc_12m       = DC12m / RC12m
+```
+
+É o equivalente bimestral do "trailing twelve months" usado em análise fiscal corporativa.
+
+Para o **status constitucional** do painel, preferimos `dc_rc_12m` quando disponível; quando não (primeiros bimestres da série, sem ano anterior na base), caímos para a razão acumulada do bimestre como aproximação.
+
+## Coluna de valor utilizada
+- **Receitas correntes:** coluna `Até o Bimestre (c)` — acumulado realizado.
+- **Despesas correntes (principal):** coluna `DESPESAS EMPENHADAS ATÉ O BIMESTRE (f)` — acumulado empenhado.
+- **Despesas correntes (auditoria):** coluna `DESPESAS LIQUIDADAS ATÉ O BIMESTRE (h)`.
 
 ## Contas mapeadas
-Por correspondência de descrição normalizada (remove acentos, caixa alta, espaços compactados), porque os códigos `cod_conta` variam entre edições anuais do MDF.
+Por correspondência de descrição normalizada (remove acentos, caixa alta, espaços compactados), porque os códigos `cod_conta` variam entre edições anuais do MDF (e ainda servem para distinguir intra vs exceto-intra).
 
 | Nome canônico | Descrição RREO |
 |---|---|
-| `receitas_correntes` | RECEITAS CORRENTES |
-| `transferencias_correntes` | TRANSFERÊNCIAS CORRENTES |
-| `despesas_correntes` | DESPESAS CORRENTES |
+| `receitas_correntes` | RECEITAS CORRENTES (agregado exc-intra + intra) |
+| `transferencias_correntes` | TRANSFERÊNCIAS CORRENTES (agregado) |
+| `despesas_correntes` | DESPESAS CORRENTES (agregado, empenhadas) |
 | `pessoal_encargos` | PESSOAL E ENCARGOS SOCIAIS |
 | `juros_encargos` | JUROS E ENCARGOS DA DÍVIDA |
 | `outras_despesas_correntes` | OUTRAS DESPESAS CORRENTES |
@@ -36,20 +73,19 @@ Por correspondência de descrição normalizada (remove acentos, caixa alta, esp
 ```
 poupanca_bruta = receitas_correntes − despesas_correntes
 ```
-Mede o quanto, do que entrou em receita corrente, sobra após cobrir as despesas correntes. Quando positiva, o Estado tem recursos correntes próprios disponíveis para investimento ou amortização de dívida.
+Quando positiva, o Estado tem recursos correntes disponíveis para investimento ou amortização de dívida. Como usamos despesa empenhada, esse indicador captura o compromisso assumido com a operação corrente, não apenas o já liquidado.
 
 ### Poupança líquida (proxy)
 ```
 poupanca_liquida_proxy = (receitas_correntes − transferencias_correntes) − despesas_correntes
 ```
-**Proxy** porque a apuração rigorosa da Receita Corrente Líquida (RCL) exige deduzir, da receita corrente bruta, as transferências constitucionais e legais que o ente é obrigado a repassar (no caso dos Estados, principalmente para Municípios). Esse detalhamento vive no **RREO Anexo 03 (Demonstrativo da RCL)**, fora do escopo do Anexo 01.
+**Proxy** porque a apuração rigorosa da Receita Corrente Líquida (RCL) exige deduzir as transferências constitucionais e legais que o ente repassa a Municípios — esse detalhamento vive no **RREO Anexo 03 (Demonstrativo da RCL)**, fora do escopo do Anexo 01.
 
-Como aproximação, subtraímos o total de **transferências correntes recebidas** — note que isso é *qualitativamente diferente* da dedução exigida pela LRF (art. 2º, §1º). É um indicador exploratório, útil para comparação relativa, e deve ser substituído por RCL oficial em uma futura versão que incorpore o Anexo 03.
-
-### DC ÷ RC (despesa corrente sobre receita corrente)
+### DC ÷ RC
 ```
-dc_rc = despesas_correntes / receitas_correntes
-dc_rc_12m = média móvel de 4 bimestres (~12 meses) de dc_rc
+dc_rc       = despesas_correntes_acumulado / receitas_correntes_acumulado  (dentro do exercício)
+dc_rc_12m   = trailing 12 months (chave do art. 167-A — é a métrica principal)
+dc_rc_liquidada = mesma razão, mas com despesa liquidada (auditoria)
 ```
 
 ## Gatilhos do art. 167-A da CF (EC 109/2021)
@@ -62,13 +98,17 @@ A Emenda Constitucional 109/2021 introduziu o art. 167-A na Constituição Feder
 | Alerta | 85% – 95% | Amarelo | Aproximação das condições de acionamento; vigilância recomendada. |
 | Crítica | ≥ 95% | Vermelho | Acima do limiar que justifica as vedações automáticas do art. 167-A. |
 
-**Importante:** o art. 167-A originalmente trata da **União**, embora seus parâmetros sirvam de referência analítica para entes subnacionais. As vedações específicas (concessão de vantagens, contratação de pessoal etc.) têm regimes próprios para Estados e Municípios na LRF (Lei Complementar 101/2000). Esta classificação é, portanto, **interpretativa**.
+**Importante:** o art. 167-A se aplica a todos os entes (CF: "União, Estados, DF e Municípios"). As vedações específicas (concessão de vantagens, contratação de pessoal etc.) têm regimes próprios para Estados na LRF (LC 101/2000).
+
+## Reconciliação com a SEF/SC
+A SEF/SC publica o mesmo indicador em base **mensal** (fonte: contabilidade interna). Como o Siconfi público só publica em base **bimestral**, nossas janelas de 12 meses não casam exatamente os mesmos meses, gerando uma diferença residual de até ~2 pontos percentuais entre nosso `dc_rc_12m` e o número publicado pela SEF para o mês mais próximo. Para fechamentos anuais (bimestre 6), os valores **coincidem** (ex.: 2025: SEF 88,65% × nosso 88,64%).
 
 ## Atualização do conjunto
 Pipeline em GitHub Actions executa no dia 5 de cada mês (cron `0 9 5 * *`). Caso o bimestre mais recente ainda não tenha sido publicado pelo Estado no Siconfi, a chamada retorna 404 e o pipeline registra warning sem falhar.
 
 ## Limitações conhecidas
-1. **RCL é proxy**, não oficial — vide acima.
-2. **Sem deflator** — os valores são nominais. Comparações intertemporais devem considerar inflação.
-3. **Sem Anexo 02** — Demonstrativo da Execução das Despesas por Função/Subfunção. Pode ser incorporado em futuras versões.
-4. **Sem comparativo entre UFs** — a estrutura suporta, mas a v1 é Santa Catarina apenas.
+1. **Granularidade bimestral** — Siconfi só publica de 2 em 2 meses; a SEF tem dados mensais.
+2. **RCL é proxy**, não oficial — vide acima sobre Anexo 03.
+3. **Sem deflator** — valores nominais. Comparações intertemporais devem considerar inflação.
+4. **Sem Anexo 02** — Demonstrativo da Execução das Despesas por Função/Subfunção.
+5. **Sem comparativo entre UFs** — estrutura suporta, mas v1 é Santa Catarina apenas.
